@@ -1,1015 +1,995 @@
 
-
 #!/usr/bin/env python3
+"""SIM17.4 AMENDED — exact parent projection, arithmetic and h obstruction.
+
+Gates A-G. All mathematical certificates use Python/NumPy integer arithmetic.
+No dynamics or OPS-target information enters Gates A-F.
+The octavian support code is a DECLARED input inherited from SIM17.1,
+not independently selected. Exact coordinate carrier census is restricted.
 """
-SIM17.4 — Parent Projectors, Bilinear Blocks,
-Arithmetic Admissibility, and Half-Turn Selection
-
-VALIDATOR RUN-BUTTON EDITION
-
-Gates:
- A. 16D parent and Clifford volume identities
- B. Projection selection and parent symmetries
- C. Four bilinear input-sector blocks
- D. Associator projectors and composed 4D projections
- E. Independently specified octavian arithmetic controls
- F. Candidate half-turn selection and symmetry obstruction
- G. Held-out frozen OPS acceptance
-
-Exact integer arithmetic.
-No ISP, LCO dynamics, stochastic evolution,
-graph fitting, or renormalization.
-
-Dependency: numpy
-
-All conclusions are restricted to declared inputs,
-coordinate constructions, and tested symmetry groups.
-"""
-
 import itertools as it
 import json
 from collections import Counter
-
+from math import comb
 import numpy as np
 
 
-# ============================================================
-# VALIDATOR UTILITIES
-# ============================================================
-
-def gate(label, condition):
-    if not bool(condition):
-        raise AssertionError("FAIL | " + label)
-    print("PASS | " + label)
+def check(msg, assertion):
+    if not bool(assertion):
+        raise AssertionError("FAIL | " + msg)
+    print("PASS | " + msg)
 
 
 def cd(i, j, n=16):
-    """Exact Cayley-Dickson signed basis multiplication."""
     if n == 1:
-        return (1, 0)
-
-    k = n // 2
-
-    if i < k and j < k:
-        return cd(i, j, k)
-
+        return 1, 0
+    k = n//2
+    if i < k and j < k: return cd(i,j,k)
     if i < k and j >= k:
-        s, t = cd(j-k, i, k)
-        return (s, t+k)
-
+        s,t = cd(j-k,i,k); return s,t+k
     if i >= k and j < k:
-        s, t = cd(i-k, j, k)
-        return (s * (1 if j == 0 else -1), t+k)
+        s,t = cd(i-k,j,k); return s*(1 if j==0 else -1),t+k
+    s,t = cd(j-k,i-k,k)
+    return -s*(1 if j-k==0 else -1),t
 
-    s, t = cd(j-k, i-k, k)
-    return (-s * (1 if j-k == 0 else -1), t)
+SG=np.zeros((16,16),dtype=np.int64)
+IX=np.zeros((16,16),dtype=np.int64)
+for i,j in it.product(range(16),repeat=2): SG[i,j],IX[i,j]=cd(i,j)
+I16=np.eye(16,dtype=np.int64)
+I8=np.eye(8,dtype=np.int64)
+W=tuple(range(8)); U=tuple(range(8,16))
 
-
-SG = np.zeros((16, 16), dtype=np.int64)
-IX = np.zeros((16, 16), dtype=np.int64)
-
-for i, j in it.product(range(16), repeat=2):
-    SG[i, j], IX[i, j] = cd(i, j)
-
-I16 = np.eye(16, dtype=np.int64)
-I8 = np.eye(8, dtype=np.int64)
-
+def mult(x,y):
+    z=np.zeros(16,dtype=np.int64)
+    for i in np.flatnonzero(x):
+        for j in np.flatnonzero(y):
+            z[int(IX[i,j])] += int(x[i])*int(y[j])*int(SG[i,j])
+    return z
 
 def left(i):
-    out = np.zeros((16, 16), dtype=np.int64)
+    a=np.zeros((16,16),dtype=np.int64)
+    for j in range(16): a[int(IX[i,j]),j]=SG[i,j]
+    return a
+J=[left(i) for i in range(16)]
 
-    for j in range(16):
-        out[int(IX[i, j]), j] = SG[i, j]
+def oprod(x,y):
+    return mult(
+        np.r_[x,np.zeros(8,dtype=np.int64)],
+        np.r_[y,np.zeros(8,dtype=np.int64)]
+    )[:8]
 
-    return out
+def conj8(x):
+    y=x.copy(); y[1:]*=-1; return y
 
+def output_rank(rows,cols,out):
+    return len({
+        int(IX[i,j])
+        for i,j in it.product(rows,cols)
+        if int(IX[i,j]) in out
+    })
 
-J = [left(i) for i in range(16)]
-
-
-def mul(v, w):
-    out = np.zeros(16, dtype=np.int64)
-
-    for i in np.flatnonzero(v):
-        for j in np.flatnonzero(w):
-            out[int(IX[i, j])] += (
-                int(v[i])
-                * int(w[j])
-                * int(SG[i, j])
+def exact_det(M):
+    """Bareiss fraction-free determinant, arbitrary Python integers."""
+    a=[[int(x) for x in row] for row in M]
+    n=len(a); sign=1; prev=1
+    if n==1:return a[0][0]
+    for k in range(n-1):
+        if a[k][k]==0:
+            swap=next(
+                (j for j in range(k+1,n) if a[j][k]),
+                None
             )
+            if swap is None:return 0
+            a[k],a[swap]=a[swap],a[k]; sign=-sign
+        piv=a[k][k]
+        for i in range(k+1,n):
+            for j in range(k+1,n):
+                num=a[i][j]*piv-a[i][k]*a[k][j]
+                if num%prev:
+                    raise ArithmeticError('nonexact Bareiss division')
+                a[i][j]=num//prev
+        for i in range(k+1,n):a[i][k]=0
+        prev=piv
+    return sign*a[-1][-1]
 
-    return out
 
-
-print("=" * 64)
-print("SIM17.4 — PARENT PROJECTION / BILINEAR / HALF-TURN AUDIT")
-print("=" * 64)
+print('='*67)
+print('SIM17.4 — AMENDED EXACT PARENT-PROJECTION VALIDATOR')
+print('='*67)
 
 
 # ============================================================
-# GATE A — PARENT AND CLIFFORD VOLUME
+# A: EXACT PARENT, CLIFFORD VOLUME, SPECTRAL PROJECTIONS
 # ============================================================
 
-print("\n--- GATE A: PARENT AND CLIFFORD VOLUME ---")
+print('\n--- GATE A: CAYLEY-DICKSON AND CLIFFORD VOLUME ---')
 
-gate(
-    "A signed multiplication and 16D identity",
+check(
+    'A full signed XOR algebra, identity, imaginary squares',
     all(
-        int(IX[i, j]) == (i ^ j)
-        for i, j in it.product(range(16), repeat=2)
+        int(IX[i,j])==i^j
+        for i,j in it.product(range(16),repeat=2)
     )
-    and all(
-        SG[0, i] == SG[i, 0] == 1
-        for i in range(16)
-    )
+    and all(SG[0,i]==SG[i,0]==1 for i in range(16))
+    and all(SG[i,i]==-1 for i in range(1,16))
 )
 
-gate(
-    "A individual 15 imaginary orthogonal complex structures",
+check(
+    'A all 15 imaginary left operators are orthogonal complex structures',
     all(
-        np.array_equal(J[i] @ J[i], -I16)
-        and np.array_equal(J[i].T, -J[i])
-        for i in range(1, 16)
+        np.array_equal(J[i]@J[i],-I16)
+        and np.array_equal(J[i].T,-J[i])
+        for i in range(1,16)
     )
 )
 
-gate(
-    "A full 7-generator parent anticommutation",
+check(
+    'A seven original generators anticommute throughout the parent',
     all(
-        not np.any(J[i] @ J[j] + J[j] @ J[i])
-        for i, j in it.combinations(range(1, 8), 2)
+        not np.any(J[i]@J[j]+J[j]@J[i])
+        for i,j in it.combinations(range(1,8),2)
     )
 )
 
-Gamma7 = I16.copy()
-Gamma8 = I16.copy()
+Gamma7=I16.copy()
+Gamma8=I16.copy()
 
-for i in range(1, 8):
-    Gamma7 = Gamma7 @ J[i]
+for i in range(1,8):
+    Gamma7=Gamma7@J[i]
 
-for i in range(8, 16):
-    Gamma8 = Gamma8 @ J[i]
+for i in range(8,16):
+    Gamma8=Gamma8@J[i]
 
-expected = np.diag([-1]*8 + [1]*8)
-
-gate(
-    "A Gamma7 = diag(-I8,+I8)",
-    np.array_equal(Gamma7, expected)
+check(
+    'A Gamma7 = -Gamma8 = diag(-I8,+I8)',
+    np.array_equal(Gamma7,np.diag([-1]*8+[1]*8))
+    and np.array_equal(Gamma8,-Gamma7)
 )
 
-gate(
-    "A Gamma8 = -Gamma7",
-    np.array_equal(Gamma8, -Gamma7)
+P=(I16+Gamma8)//2
+K=I16-P
+
+check(
+    'A two complementary rank-eight spectral projectors',
+    np.array_equal(P@P,P)
+    and np.array_equal(K@K,K)
+    and not np.any(P@K)
+    and int(np.trace(P))==8
+    and int(np.trace(K))==8
 )
-
-# Exact integer spectral projectors.
-P = (I16 + Gamma8) // 2
-K = I16 - P
-
-W = tuple(range(8))
-U = tuple(range(8, 16))
-
-gate(
-    "A exact complementary orthogonal spectral projectors",
-    np.array_equal(P @ P, P)
-    and np.array_equal(K @ K, K)
-    and np.array_equal(
-        P @ K,
-        np.zeros((16, 16), dtype=np.int64)
-    )
-    and np.array_equal(
-        P,
-        np.diag([1]*8 + [0]*8)
-    )
-)
-
-print("A | rank P = 8, rank K = 8")
 
 
 # ============================================================
-# GATE B — PROJECTOR SELECTION AND INPUT SYMMETRY
+# B: COORDINATE CENSUS, MOVING AUTOMORPHISM, STABILIZER
 # ============================================================
 
-print("\n--- GATE B: PROJECTOR SELECTION AND INPUT SYMMETRY ---")
+print('\n--- GATE B: COORDINATE LIMIT AND MOVING PARENT AUTOMORPHISM ---')
 
-# The Clifford families are supplied by the chosen
-# Cayley-Dickson splitting. This is not an intrinsic
-# selection of the parent decomposition.
+closed=[]
+ambient=[]
 
-# Independently enumerate unital coordinate eight-planes.
-# Frozen OPS information is not used.
-
-closed = []
-
-for rest in it.combinations(range(1, 16), 7):
-    S = (0,) + rest
-
+for tail in it.combinations(range(1,16),7):
+    S=(0,)+tail
     if all(
-        int(IX[i, j]) in S
-        for i, j in it.product(S, repeat=2)
+        int(IX[i,j]) in S
+        for i,j in it.product(S,repeat=2)
     ):
         closed.append(S)
-
-ambient = []
-
-for S in closed:
-    count = sum(
-        not np.any(
-            J[i] @ J[j] + J[j] @ J[i]
+        ambient.append(
+            sum(
+                not np.any(J[i]@J[j]+J[j]@J[i])
+                for i,j in it.combinations(S[1:],2)
+            )
         )
-        for i, j in it.combinations(S[1:], 2)
+
+check(
+    'B coordinate census 6435 candidates, 15 closed, unique 21/21 coordinate carrier',
+    comb(15,7)==6435
+    and len(closed)==15
+    and ambient.count(21)==1
+    and closed[ambient.index(21)]==W
+)
+
+# Psi matrix is M/2, M=A+sqrt(3)B with integer A,B.
+# Psi(e0)=e0; Psi(e8)=e8.
+#
+# Psi(e_i)=(-e_i-sqrt(3)e_{i+8})/2
+# Psi(e_{i+8})=(sqrt(3)e_i-e_{i+8})/2
+# for i=1..7.
+
+A=np.zeros((16,16),dtype=np.int64)
+B=np.zeros((16,16),dtype=np.int64)
+
+A[0,0]=2
+A[8,8]=2
+
+for i in range(1,8):
+    A[i,i]=-1
+    B[i+8,i]=-1
+    A[i+8,i+8]=-1
+    B[i,i+8]=1
+
+def pair_matmul(X,Y):
+    """Multiply numerator pairs representing X+sqrt(3)Y."""
+    (a,b),(c,d)=X,Y
+    return a@c+3*(b@d),a@d+b@c
+
+AA,BB=pair_matmul((A,B),(A,B))
+AAA,BBB=pair_matmul((AA,BB),(A,B))
+
+check(
+    'B exact Q(sqrt3) automorphism has order three',
+    np.array_equal(AAA,8*I16)
+    and not np.any(BBB)
+)
+
+# Product of Psi(e_i) and Psi(e_j), numerator /2 each.
+# Compare to Psi(e_i e_j), denominator /2.
+
+for i,j in it.product(range(16),repeat=2):
+    ai,bi=A[:,i],B[:,i]
+    aj,bj=A[:,j],B[:,j]
+
+    r=np.zeros(16,dtype=np.int64)
+    s=np.zeros(16,dtype=np.int64)
+
+    for k in range(16):
+        for l in range(16):
+            t=int(IX[k,l])
+            f=int(SG[k,l])
+            r[t]+=f*(
+                int(ai[k])*int(aj[l])
+                +3*int(bi[k])*int(bj[l])
+            )
+            s[t]+=f*(
+                int(ai[k])*int(bj[l])
+                +int(bi[k])*int(aj[l])
+            )
+
+    t=int(IX[i,j])
+    f=int(SG[i,j])
+
+    if not (
+        np.array_equal(r,2*f*A[:,t])
+        and np.array_equal(s,2*f*B[:,t])
+    ):
+        raise AssertionError(
+            'FAIL | B Psi multiplication at '+str((i,j))
+        )
+
+check(
+    'B Psi preserves all 256 parent multiplication products',
+    True
+)
+
+check(
+    'B Psi moves P and its carrier is unital and non-coordinate',
+    np.any(A@P-P@A)
+    or np.any(B@P-P@B)
+)
+
+# Check conjugate P'=Psi P Psi^-1
+# using Psi^-1=Psi^2 and exact Q(sqrt3) arithmetic.
+#
+# P' numerator /8.
+
+C_A,C_B=pair_matmul((A@P,B@P),(AA,BB))
+T_A,T_B=pair_matmul((C_A,C_B),(C_A,C_B))
+
+check(
+    'B transported P has exact idempotence, unit and rank',
+    np.array_equal(T_A,8*C_A)
+    and np.array_equal(T_B,8*C_B)
+    and int(np.trace(C_A))==64
+    and int(np.trace(C_B))==0
+    and np.array_equal(
+        C_A[:,0],
+        np.array([8]+[0]*15,dtype=np.int64)
     )
-    ambient.append(count)
-
-gate(
-    "B 15 closed coordinate 8-planes",
-    len(closed) == 15
+    and not (
+        np.array_equal(C_A,8*P)
+        and not np.any(C_B)
+    )
 )
 
-gate(
-    "B only standard W has 21 ambient anticommuting pairs",
-    ambient.count(21) == 1
-    and closed[ambient.index(21)] == W
+print(
+    'B | non-coordinate parent-conjugate rank-eight projector certified'
 )
 
 
-# ------------------------------------------------------------
-# B2 — Signed octonion basis automorphisms
-# ------------------------------------------------------------
+# ============================================================
+# C: EXACT BILINEAR BLOCKS AND DEFECT IDENTITY
+# ============================================================
 
-# These preserve the original octonionic multiplication.
-# They can be extended to the parent by
-#
-#       g(a,b) = (g(a),g(b)).
-#
-# This constructs a certified parent automorphism SUBGROUP.
-# It does not enumerate every sedenion automorphism.
+print('\n--- GATE C: BILINEAR TENSOR BLOCKS ---')
 
-autos = []
+blocks={
+    name:output_rank(a,b,set(W))
+    for name,a,b in [
+        ('WW',W,W),
+        ('WU',W,U),
+        ('UW',U,W),
+        ('UU',U,U)
+    ]
+}
 
-for a, b, c in it.product(range(1, 8), repeat=3):
+check(
+    'C full bilinear block profile (8,0,0,8)',
+    blocks=={
+        'WW':8,
+        'WU':0,
+        'UW':0,
+        'UU':8
+    }
+)
 
-    if b == a or c in (a, b, a ^ b):
+check(
+    'C exact tensor-kernel dimensions',
+    {k:64-r for k,r in blocks.items()}
+    =={
+        'WW':56,
+        'WU':64,
+        'UW':64,
+        'UU':56
+    }
+)
+
+for i,j in it.product(range(16),repeat=2):
+    x=I16[:,i]
+    y=I16[:,j]
+
+    defect=(
+        P@mult(x,y)
+        -P@mult(P@x,P@y)
+    )
+
+    if not np.array_equal(
+        defect,
+        P@mult(K@x,K@y)
+    ):
+        raise AssertionError(
+            'FAIL | C projection defect at '+str((i,j))
+        )
+
+for i,j in it.product(range(8),repeat=2):
+    x=I16[:,8+i]
+    y=I16[:,8+j]
+
+    if not np.array_equal(
+        mult(x,y)[:8],
+        -oprod(conj8(I8[:,j]),I8[:,i])
+    ):
+        raise AssertionError(
+            'FAIL | C UU CD identity'
+        )
+
+check(
+    'C defect exactly equals complementary UU product on all 256 basis pairs',
+    True
+)
+
+check(
+    'C UU product = -conj(d)b on all 64 complementary pairs',
+    True
+)
+
+
+# ============================================================
+# D: CONSTRUCT FOUR-PLANE PROJECTORS FROM ASSOCIATOR DEFECT
+# ============================================================
+
+print('\n--- GATE D: DEFECT-DERIVED QUATERNIONIC PROJECTORS ---')
+
+L=[J[i][:8,:8] for i in range(8)]
+
+projectors={}
+qdata=[]
+
+for i,j in it.combinations(range(1,8),2):
+    c=i^j
+    line=tuple(sorted((0,i,j,c)))
+
+    if line in projectors:
         continue
 
-    perm = tuple(
-        (a if i & 1 else 0)
-        ^ (b if i & 2 else 0)
-        ^ (c if i & 4 else 0)
+    D=int(SG[i,j])*L[c]-L[i]@L[j]
+    gram=D.T@D
+
+    if np.any(gram%4):
+        raise AssertionError(
+            'FAIL | D nonintegral defect projector'
+        )
+
+    # The projector is DERIVED from the multiplication defect.
+    # No coordinate mask is used to construct it.
+
+    Q=I8-gram//4
+
+    # Independent acceptance comparison.
+
+    target=np.zeros((8,8),dtype=np.int64)
+    for k in line:
+        target[k,k]=1
+
+    if not (
+        np.array_equal(Q,target)
+        and np.array_equal(Q@Q,Q)
+        and np.array_equal(Q.T,Q)
+        and np.trace(Q)==4
+    ):
+        raise AssertionError(
+            'FAIL | D derivation of Q '+str(line)
+        )
+
+    # Associativity of the image.
+
+    for a,b,c0 in it.product(line,repeat=3):
+        u=oprod(
+            oprod(I8[:,a],I8[:,b]),
+            I8[:,c0]
+        )
+        v=oprod(
+            I8[:,a],
+            oprod(I8[:,b],I8[:,c0])
+        )
+
+        if not np.array_equal(u,v):
+            raise AssertionError(
+                'FAIL | D four-plane nonassoc'
+            )
+
+    R=np.zeros((16,16),dtype=np.int64)
+    R[:8,:8]=Q
+
+    ranks={
+        nm:output_rank(x,y,set(line))
+        for nm,x,y in [
+            ('WW',W,W),
+            ('WU',W,U),
+            ('UW',U,W),
+            ('UU',U,U)
+        ]
+    }
+
+    if ranks!={'WW':4,'WU':0,'UW':0,'UU':4}:
+        raise AssertionError(
+            'FAIL | D composed bilinear ranks'
+        )
+
+    projectors[line]=Q
+    qdata.append({
+        'line':list(line),
+        'projector_rank':4,
+        'composed_bilinear_blocks':ranks
+    })
+
+check(
+    'D seven projectors derived FROM defects, associative and rank four',
+    len(projectors)==7
+)
+
+check(
+    'D all composed bilinear maps have 4,0,0,4 block ranks',
+    True
+)
+
+
+# ============================================================
+# E: DECLARED OCTAVIAN LATTICE, EXACT BASIS, INCLUSION THEOREM
+# ============================================================
+
+print('\n--- GATE E: INTEGRAL ARITHMETIC AND NECESSITY CONTROL ---')
+
+# This coordinate conversion is inherited from SIM17.1.
+# Its original input presentation uses SIM14 indexing.
+# It is supplied arithmetic data, NOT selected by the
+# parent multiplication and NOT used to derive frozen OPS.
+
+CONVERT=(0,4,1,5,7,3,6,2)
+
+OLD_SUPPORTS=(
+    (0,1,2,3),
+    (0,1,4,5),
+    (0,1,6,7),
+    (0,2,4,7),
+    (0,2,5,6),
+    (0,3,4,6),
+    (0,3,5,7),
+    (1,2,4,6),
+    (1,2,5,7),
+    (1,3,4,7),
+    (1,3,5,6),
+    (2,3,4,5),
+    (2,3,6,7),
+    (4,5,6,7)
+)
+
+SUPPORTS=tuple(
+    tuple(sorted(CONVERT[i] for i in S))
+    for S in OLD_SUPPORTS
+)
+
+CODE=(
+    {0,255}
+    |{
+        sum(1<<i for i in S)
+        for S in SUPPORTS
+    }
+)
+
+check(
+    'E code has 16 doubly-even words and XOR closure',
+    len(CODE)==16
+    and Counter(x.bit_count() for x in CODE)
+        =={0:1,4:14,8:1}
+    and all(
+        a^b in CODE
+        for a,b in it.product(CODE,repeat=2)
+    )
+)
+
+
+def in_order2(x):
+    return sum(
+        1<<i
+        for i,a in enumerate(x)
+        if int(a)%2
+    ) in CODE
+
+
+def in_z2(x):
+    return all(int(a)%2==0 for a in x)
+
+
+def octmul2(x,y):
+    z=np.zeros(8,dtype=np.int64)
+    for i in range(8):
+        for j in range(8):
+            z[int(IX[i,j])]+=(
+                int(x[i])
+                *int(y[j])
+                *int(SG[i,j])
+            )
+    return tuple(int(t) for t in z)
+
+
+def conj2(x):
+    return (x[0],)+tuple(-t for t in x[1:])
+
+
+# Each vector represents 2*x.
+# Product of two doubled vectors represents 4*(xy).
+# Divide by 2 to obtain doubled coordinates for xy.
+
+def product_doubled(x,y):
+    raw=octmul2(x,y)
+    if any(t%2 for t in raw):
+        raise ArithmeticError(
+            'half-integrality failure'
+        )
+    return tuple(t//2 for t in raw)
+
+
+# ------------------------------------------------------------
+# E1 — 240 exact octavian units
+# ------------------------------------------------------------
+
+roots=set()
+
+for i in range(8):
+    for v in (-2,2):
+        x=[0]*8
+        x[i]=v
+        roots.add(tuple(x))
+
+for support in SUPPORTS:
+    for signs in it.product((-1,1),repeat=4):
+        x=[0]*8
+        for i,v in zip(support,signs):
+            x[i]=v
+        roots.add(tuple(x))
+
+roots=sorted(roots)
+
+check(
+    'E all 240 octavian unit vectors explicitly generated',
+    len(roots)==240
+    and all(
+        sum(t*t for t in r)==4
+        for r in roots
+    )
+)
+
+for x,y in it.product(roots,repeat=2):
+    if not in_order2(product_doubled(x,y)):
+        raise AssertionError(
+            'FAIL | E root product outside lattice'
+        )
+
+check(
+    'E exact 57,600 unit-product closures',
+    True
+)
+
+
+# ------------------------------------------------------------
+# E2 — Exact integral basis
+# ------------------------------------------------------------
+
+# L2=2Z^8+CODE, representing 2*O.
+# Four independent binary codewords plus 2e_i
+# generate the lattice.
+#
+# Find an 8-vector basis with determinant magnitude 16.
+
+code_basis=[]
+subspace={0}
+
+for c in sorted(CODE):
+    if c not in subspace:
+        code_basis.append(c)
+        subspace={
+            x^y
+            for x in subspace
+            for y in (0,c)
+        }
+
+check(
+    'E binary code generated by four independent words',
+    len(code_basis)==4
+    and subspace==CODE
+)
+
+std=[
+    tuple(
+        2 if j==i else 0
+        for j in range(8)
+    )
+    for i in range(8)
+]
+
+code_vecs=[
+    tuple(
+        (c>>i)&1
+        for i in range(8)
+    )
+    for c in code_basis
+]
+
+gens=std+code_vecs
+lat_basis=None
+
+for combo in it.combinations(range(12),8):
+    cols=[gens[i] for i in combo]
+    det=exact_det(list(zip(*cols)))
+
+    if abs(det)==16:
+        lat_basis=cols
+        break
+
+check(
+    'E explicit exact lattice basis covolume 16 in doubled coordinates',
+    lat_basis is not None
+)
+
+for a,b in it.product(lat_basis,repeat=2):
+    if not in_order2(product_doubled(a,b)):
+        raise AssertionError(
+            'FAIL | E basis product outside integral order'
+        )
+
+check(
+    'E basis closure extends bilinearly to entire octavian lattice',
+    True
+)
+
+check(
+    'E lattice contains 1 and is conjugation stable',
+    in_order2(std[0])
+    and all(
+        in_order2(conj2(b))
+        for b in lat_basis
+    )
+)
+
+
+# ------------------------------------------------------------
+# E3 — Arithmetic inclusion theorem and negative control
+# ------------------------------------------------------------
+
+# For a unital, conjugation-stable,
+# multiplication-closed octonionic lattice B:
+#
+#    conjugate(B)*B = B
+#
+# because 1 belongs to B and products are in B.
+#
+# Thus:
+#
+#    conjugate(B)*B subset A  iff  B subset A.
+#
+# The four arithmetic outcomes below certify lattice
+# containment, not new parent-specific necessity.
+
+O_GEN=lat_basis
+Z_GEN=std
+
+lattice_tests={}
+
+for aname,Amem in [
+    ('Z8',in_z2),
+    ('O',in_order2)
+]:
+    for bname,Bgens in [
+        ('Z8',Z_GEN),
+        ('O',O_GEN)
+    ]:
+        subset=all(
+            Amem(x)
+            for x in Bgens
+        )
+
+        products=all(
+            Amem(
+                product_doubled(conj2(x),y)
+            )
+            for x,y in it.product(Bgens,repeat=2)
+        )
+
+        if subset!=products:
+            raise AssertionError(
+                'FAIL | E inclusion equivalence'
+            )
+
+        lattice_tests[
+            'A='+aname+'_B='+bname
+        ]=products
+
+check(
+    'E four arithmetic controls reduce EXACTLY to lattice inclusion',
+    lattice_tests=={
+        'A=Z8_B=Z8':True,
+        'A=Z8_B=O':False,
+        'A=O_B=Z8':True,
+        'A=O_B=O':True
+    }
+)
+
+check(
+    'E octonion-only arithmetic control reproduces parent UU membership',
+    all(
+        in_order2(
+            product_doubled(conj2(x),y)
+        )
+        for x,y in it.product(O_GEN,repeat=2)
+    )
+)
+
+# Psi has irrational coefficients, hence it does not
+# preserve the supplied rational product lattice O+O.
+
+check(
+    'E projector-moving Psi fails to preserve rational O+O lattice',
+    np.any(B)
+)
+
+print('E | lattice pair results:',lattice_tests)
+
+
+# ============================================================
+# F: TWO SYMMETRY REGIMES, TRANSLATION ORBITS, PARENT PROVENANCE
+# ============================================================
+
+print('\n--- GATE F: PARENT AND ARITHMETIC STABILIZER ORBITS ---')
+
+autos=[]
+
+for a,b,c in it.product(range(1,8),repeat=3):
+    if b==a or c in (a,b,a^b):
+        continue
+
+    perm=tuple(
+        (a if i&1 else 0)
+        ^(b if i&2 else 0)
+        ^(c if i&4 else 0)
         for i in range(8)
     )
 
     for mask in range(128):
-
-        signs = (1,) + tuple(
-            -1 if mask & (1 << (i-1)) else 1
-            for i in range(1, 8)
+        signs=(1,)+tuple(
+            -1 if mask & (1<<(i-1)) else 1
+            for i in range(1,8)
         )
 
         if all(
-            int(SG[i, j]) * signs[i ^ j]
+            int(SG[i,j])*signs[i^j]
             ==
-            signs[i] * signs[j]
-            * int(SG[perm[i], perm[j]])
-            for i, j in it.product(range(8), repeat=2)
+            signs[i]*signs[j]
+            *int(SG[perm[i],perm[j]])
+            for i,j in it.product(range(8),repeat=2)
         ):
-            autos.append((perm, signs))
+            autos.append((perm,signs))
 
-gate(
-    "B 1344 signed octonion basis automorphisms",
-    len(autos) == 1344
+check(
+    'F exactly 1344 signed octonion basis automorphisms',
+    len(autos)==1344
 )
 
 
 # ------------------------------------------------------------
-# B3 — Verify each symmetry extends to the 16D parent
+# F2 — Certify 16D lifts
 # ------------------------------------------------------------
 
-for perm, signs in autos:
+for perm,signs in autos:
 
-    def ap(i):
-        return perm[i & 7] + (i & 8)
+    def pf(i):
+        return perm[i&7]+(i&8)
 
-    def sig(i):
-        return signs[i & 7]
+    def sf(i):
+        return signs[i&7]
 
     if not all(
-        int(SG[i, j]) * sig(i ^ j)
+        int(SG[i,j])*sf(i^j)
         ==
-        sig(i) * sig(j)
-        * int(SG[ap(i), ap(j)])
-        and int(IX[ap(i), ap(j)]) == ap(i ^ j)
-        for i, j in it.product(range(16), repeat=2)
+        sf(i)*sf(j)
+        *int(SG[pf(i),pf(j)])
+        and int(IX[pf(i),pf(j)])==pf(i^j)
+        for i,j in it.product(range(16),repeat=2)
     ):
         raise AssertionError(
-            "FAIL | B parent automorphism lift"
+            'FAIL | F parent lift'
         )
 
-gate(
-    "B all 1344 octonion automorphisms lift and fix P",
+check(
+    'F all 1344 lift to 16D multiplication automorphisms fixing P',
     True
 )
 
-orbits = {
-    i: {
-        perm[i]
-        for perm, _ in autos
-    }
-    for i in range(1, 8)
+
+# ------------------------------------------------------------
+# F3 — Arithmetic-lattice-preserving subgroup
+# ------------------------------------------------------------
+
+support_set={
+    frozenset(S)
+    for S in SUPPORTS
 }
 
-gate(
-    "B residual parent symmetry transitive on seven directions",
-    all(
-        orbit == set(range(1, 8))
-        for orbit in orbits.values()
-    )
-)
-
-print("B | certified parent automorphism subgroup:", len(autos))
-
-
-# ============================================================
-# GATE C — FOUR BILINEAR SECTOR BLOCKS
-# ============================================================
-
-print("\n--- GATE C: FOUR BILINEAR SECTOR BLOCKS ---")
-
-# Parent multiplication is bilinear:
-#
-#   Phi(x,y) = P(xy)
-#
-# Each input has a component in W or U.
-#
-# Four tensor blocks:
-#   W x W
-#   W x U
-#   U x W
-#   U x U
-#
-# A rank here is the rank of the tensor-linearized
-# bilinear map. Each basis product has one signed
-# output coordinate, making this an exact rank count.
-
-def block_rank(rows, cols, output_indices):
-
-    return len({
-        int(IX[i, j])
-        for i, j in it.product(rows, cols)
-        if int(IX[i, j]) in output_indices
-    })
-
-
-block_ranks = {
-    name: block_rank(a, b, W)
-    for name, a, b in [
-        ("WW", W, W),
-        ("WU", W, U),
-        ("UW", U, W),
-        ("UU", U, U)
-    ]
-}
-
-gate(
-    "C exact bilinear rank profile 8,0,0,8",
-    block_ranks == {
-        "WW": 8,
-        "WU": 0,
-        "UW": 0,
-        "UU": 8
-    }
-)
-
-gate(
-    "C tensor kernel dimensions 56,64,64,56",
-    {
-        k: 64-v
-        for k, v in block_ranks.items()
-    }
-    ==
-    {
-        "WW": 56,
-        "WU": 64,
-        "UW": 64,
-        "UU": 56
-    }
-)
-
-
-# ------------------------------------------------------------
-# C2 — Verify Cayley-Dickson sector formula
-# ------------------------------------------------------------
-
-# For x=(a,b), y=(c,d):
-#
-#        P(xy) = ac - conjugate(d)*b
-#
-# The mixed input-sector contributions vanish.
-
-def octmul(a, b):
-
-    out = np.zeros(8, dtype=np.int64)
-
-    for i in np.flatnonzero(a):
-        for j in np.flatnonzero(b):
-
-            out[int(IX[i, j])] += (
-                int(SG[i, j])
-                * int(a[i])
-                * int(b[j])
-            )
-
-    return out
-
-
-def conj8(a):
-
-    c = a.copy()
-    c[1:] *= -1
-    return c
-
-
-for i, j in it.product(range(8), repeat=2):
-
-    x = np.zeros(16, dtype=np.int64)
-    y = np.zeros(16, dtype=np.int64)
-
-    x[8+i] = 1
-    y[8+j] = 1
-
-    ei = I8[:, i]
-    ej = I8[:, j]
-
-    if not np.array_equal(
-        mul(x, y)[:8],
-        -octmul(conj8(ej), ei)
-    ):
-        raise AssertionError(
-            "FAIL | C UU bilinear identity"
-        )
-
-gate(
-    "C exact UU = -conj(d)b on all 64 input basis pairs",
-    True
-)
-
-
-# ------------------------------------------------------------
-# C3 — Exact external-input projection defect
-# ------------------------------------------------------------
-
-# Delta_P(x,y) =
-#     P(xy) - P((Px)(Py))
-#
-# For this splitting:
-#
-# Delta_P(x,y) = P((Kx)(Ky)).
-#
-# Verify on all 256 input-basis pairs.
-
-for i, j in it.product(range(16), repeat=2):
-
-    x = I16[:, i]
-    y = I16[:, j]
-
-    defect = (
-        P @ mul(x, y)
-        - P @ mul(P @ x, P @ y)
-    )
-
-    expected_defect = P @ mul(K @ x, K @ y)
-
-    if not np.array_equal(
-        defect,
-        expected_defect
-    ):
-        raise AssertionError(
-            "FAIL | C defect decomposition"
-        )
-
-gate(
-    "C external-input projection defect exactly equals UU contribution",
-    True
-)
-
-print("C | bilinear block ranks:", block_ranks)
-
-
-# ============================================================
-# GATE D — ASSOCIATOR PROJECTORS AND COMPOSITIONS
-# ============================================================
-
-print("\n--- GATE D: ASSOCIATOR PROJECTORS AND COMPOSITIONS ---")
-
-L8 = [
-    J[i][:8, :8]
-    for i in range(8)
+preserving=[
+    (perm,signs)
+    for perm,signs in autos
+    if {
+        frozenset(perm[i] for i in S)
+        for S in SUPPORTS
+    }==support_set
 ]
 
-# Enumerate the quaternionic coordinate lines
-# directly from the chosen multiplication index law.
-# No frozen SIM14 Fano sector list imported.
-
-quats = []
-
-for a, b in it.combinations(range(1, 8), 2):
-
-    c = a ^ b
-    line = tuple(sorted((0, a, b, c)))
-
-    if line not in quats:
-        quats.append(line)
-
-quats = sorted(quats)
-
-gate(
-    "D seven independently enumerated quaternionic coordinate sectors",
-    len(quats) == 7
+check(
+    'F precisely 192 certified signed-basis symmetries preserve octavian supports',
+    len(preserving)==192
 )
 
-Rrecords = []
 
-for line in quats:
+def orbit_partition(group):
+    pending=set(range(1,8))
+    result=[]
 
-    a, b = line[1], line[2]
-    c = a ^ b
+    while pending:
+        i=min(pending)
+        orb={
+            perm[i]
+            for perm,_ in group
+        }
 
-    # Associator defect:
-    #
-    # D_ab = L_(e_a e_b) - L_a L_b
+        assert orb<=pending
+        pending-=orb
+        result.append(sorted(orb))
 
-    D = (
-        int(SG[a, b]) * L8[c]
-        - L8[a] @ L8[b]
+    return sorted(
+        result,
+        key=lambda v:(len(v),v)
     )
 
-    Q = np.zeros((8, 8), dtype=np.int64)
 
-    for i in line:
-        Q[i, i] = 1
+base_orbits=orbit_partition(autos)
+lattice_orbits=orbit_partition(preserving)
 
-    # For normalized coordinate imaginary basis:
-    #
-    #     D^T D = 4(I-Q)
-
-    if not np.array_equal(
-        D.T @ D,
-        4 * (I8-Q)
-    ):
-        raise AssertionError(
-            "FAIL | D associator spectral projector"
-        )
-
-    # R = inclusion * Q * P
-    #
-    # This is a 16D projector whose image is a
-    # 4D quaternionic coordinate subspace.
-
-    R = np.zeros((16, 16), dtype=np.int64)
-    R[:8, :8] = Q
-
-    if (
-        not np.array_equal(R @ R, R)
-        or int(np.trace(R)) != 4
-    ):
-        raise AssertionError(
-            "FAIL | D composed projection"
-        )
-
-    # Psi(x,y) = R(xy).
-    # Compute its output ranks by input sector.
-
-    ranks = {
-        name: block_rank(rows, cols, set(line))
-        for name, rows, cols in [
-            ("WW", W, W),
-            ("WU", W, U),
-            ("UW", U, W),
-            ("UU", U, U)
-        ]
-    }
-
-    if ranks != {
-        "WW": 4,
-        "WU": 0,
-        "UW": 0,
-        "UU": 4
-    }:
-        raise AssertionError(
-            "FAIL | D four-plane bilinear blocks"
-        )
-
-    # Inherited symplectic rank check.
-    #
-    # These restricted matrices are signed partial
-    # permutations, so exact rank equals the number
-    # of nonzero rows. No floating-point rank used.
-
-    for i in range(1, 8):
-
-        om = (-J[i])[np.ix_(line, line)]
-
-        assert all(
-            np.count_nonzero(row) <= 1
-            for row in om
-        )
-
-        assert all(
-            np.count_nonzero(col) <= 1
-            for col in om.T
-        )
-
-        exact_rank = int(
-            np.count_nonzero(
-                np.any(om != 0, axis=1)
-            )
-        )
-
-        if exact_rank != (4 if i in line else 0):
-            raise AssertionError(
-                "FAIL | D symplectic ranks"
-            )
-
-    Rrecords.append({
-        "line": list(line),
-        "rank_R": 4,
-        "bilinear_blocks": ranks
-    })
-
-
-gate(
-    "D all 7 associator projectors and composed Psi maps certified",
-    True
+check(
+    'F multiplication-only symmetry gives one 7-direction orbit',
+    base_orbits==[[1,2,3,4,5,6,7]]
 )
 
-gate(
-    "D all 7 four-planes have exact inherited symplectic rank signature",
-    True
-)
-
-
-# ============================================================
-# GATE E — INDEPENDENT ARITHMETIC CONTROLS
-# ============================================================
-
-print("\n--- GATE E: INDEPENDENT ARITHMETIC CONTROLS ---")
-
-# The following is a declared octavian-order input,
-# NOT an intrinsically derived lattice.
-#
-# It reproduces the multiplication-compatible support
-# arrangement of SIM17.1 in canonical CD coordinates.
-#
-# The index map is an input conversion ONLY.
-# It is not used for frozen OPS graph selection.
-
-SIM17_COORD = {
-    0: 0,
-    1: 4,
-    2: 1,
-    3: 5,
-    4: 7,
-    5: 3,
-    6: 6,
-    7: 2
-}
-
-SUPPORTS = (
-    (0, 1, 2, 3),
-    (0, 1, 4, 5),
-    (0, 1, 6, 7),
-    (0, 2, 4, 7),
-    (0, 2, 5, 6),
-    (0, 3, 4, 6),
-    (0, 3, 5, 7),
-    (1, 2, 4, 6),
-    (1, 2, 5, 7),
-    (1, 3, 4, 7),
-    (1, 3, 5, 6),
-    (2, 3, 4, 5),
-    (2, 3, 6, 7),
-    (4, 5, 6, 7)
-)
-
-CD_SUPPORTS = tuple(
-    tuple(sorted(SIM17_COORD[i] for i in supp))
-    for supp in SUPPORTS
-)
-
-code = (
-    {0, 255}
-    | {
-        sum(1 << i for i in supp)
-        for supp in CD_SUPPORTS
-    }
-)
-
-gate(
-    "E octavian 16-word doubly even additive support code",
-    len(code) == 16
-    and all(
-        a ^ b in code
-        for a, b in it.product(code, repeat=2)
-    )
-    and Counter(x.bit_count() for x in code)
-    == {0: 1, 4: 14, 8: 1}
-)
-
-
-# ------------------------------------------------------------
-# E2 — Generate the 240 norm-one vectors
-# ------------------------------------------------------------
-
-# Doubled octonion coordinates are used:
-#
-#   coordinate array represents 2*x.
-#
-# The 16 basis roots are +/-2e_i.
-# The 224 half-unit roots have four +/-1 entries.
-
-roots = set()
-
-for i in range(8):
-    for s in (-2, 2):
-
-        u = [0]*8
-        u[i] = s
-        roots.add(tuple(u))
-
-for supp in CD_SUPPORTS:
-
-    for signs in it.product((-1, 1), repeat=4):
-
-        u = [0]*8
-
-        for i, s in zip(supp, signs):
-            u[i] = s
-
-        roots.add(tuple(u))
-
-roots = sorted(roots)
-
-gate(
-    "E 240 norm-one doubled-coordinate octavian generators",
-    len(roots) == 240
-    and all(
-        sum(x*x for x in root) == 4
-        for root in roots
-    )
-)
-
-
-# ------------------------------------------------------------
-# E3 — Exact lattice membership
-# ------------------------------------------------------------
-
-def in_order2(a):
-    """Test 2*x in the chosen octavian overlattice."""
-    odd = sum(
-        1 << i
-        for i, x in enumerate(a)
-        if int(x) % 2
-    )
-    return odd in code
-
-
-def in_z8_2(a):
-    """Test 2*x in the standard integer lattice."""
-    return all(int(x) % 2 == 0 for x in a)
-
-
-def octmul_raw2(a, b):
-    """
-    a,b represent doubled inputs 2*x, 2*y.
-    Output represents 4*(xy).
-    """
-    out = [0]*8
-
-    for i, ai in enumerate(a):
-        if ai:
-            for j, bj in enumerate(b):
-                if bj:
-                    out[int(IX[i, j])] += (
-                        int(ai)
-                        * int(bj)
-                        * int(SG[i, j])
-                    )
-
-    return out
-
-
-def conj2(a):
-    return (a[0],) + tuple(-v for v in a[1:])
-
-
-unit_products = []
-
-for a in roots:
-
-    for b in roots:
-
-        raw = octmul_raw2(a, b)
-
-        if any(x % 2 for x in raw):
-            raise AssertionError(
-                "FAIL | E half-integrality of products"
-            )
-
-        out = tuple(x // 2 for x in raw)
-
-        if not in_order2(out):
-            raise AssertionError(
-                "FAIL | E chosen order multiplication closure"
-            )
-
-        unit_products.append(out)
-
-gate(
-    "E 57600 octavian unit products lie in chosen order",
-    len(unit_products) == 57600
-)
-
-
-# ------------------------------------------------------------
-# E4 — Independently specified input lattice pairs
-# ------------------------------------------------------------
-
-# Compare:
-#
-# A = Z8, B = Z8
-# A = O,  B = Z8
-# A = Z8, B = O
-# A = O,  B = O
-#
-# Test:
-#
-#       -conjugate(B)*B subset A
-#
-# On declared additive generator sets.
-#
-# This is an arithmetic admissibility comparison,
-# not intrinsic selection of A or B.
-
-ZGEN = [
-    tuple(
-        2 if k == i else 0
-        for k in range(8)
-    )
-    for i in range(8)
-]
-
-O_GEN = (
-    ZGEN
-    + [
-        tuple(
-            1 if k in supp else 0
-            for k in range(8)
-        )
-        for supp in CD_SUPPORTS
+check(
+    'F supplied arithmetic reduces certified orbits to 1+6',
+    lattice_orbits==[
+        [4],
+        [1,2,3,5,6,7]
     ]
 )
 
 
-def cross_ok(A, B):
+# ------------------------------------------------------------
+# F4 — Seven unsigned translation candidates
+# ------------------------------------------------------------
 
-    for b, d in it.product(B, repeat=2):
-
-        raw = octmul_raw2(conj2(d), b)
-
-        if any(x % 2 for x in raw):
-            return False
-
-        out = tuple(x // 2 for x in raw)
-
-        if not A(out):
-            return False
-
-    return True
-
-
-arith = {
-    "A=Z8_B=Z8": cross_ok(in_z8_2, ZGEN),
-    "A=O_B=Z8": cross_ok(in_order2, ZGEN),
-    "A=Z8_B=O": cross_ok(in_z8_2, O_GEN),
-    "A=O_B=O": cross_ok(in_order2, O_GEN)
+translations={
+    a:tuple(x^a for x in range(8))
+    for a in range(1,8)
 }
 
-gate(
-    "E independent lattice controls separate admissible/inadmissible pairs",
-    arith == {
-        "A=Z8_B=Z8": True,
-        "A=O_B=Z8": True,
-        "A=Z8_B=O": False,
-        "A=O_B=O": True
-    }
-)
-
-print("E | arithmetic controls:", arith)
-
-
-# ============================================================
-# GATE F — UNSIGNED DIRECTION/HALF-TURN SELECTION
-# ============================================================
-
-print("\n--- GATE F: UNSIGNED DIRECTION/HALF-TURN SELECTION ---")
-
-# A signed octonionic multiplication generates an
-# unsigned XOR action on the eight basis indices.
-#
-# Every nonzero direction defines one fixed-point-free
-# involution. Do not preselect h or use C8.
-
-translations = {
-    a: tuple(x ^ a for x in range(8))
-    for a in range(1, 8)
-}
-
-gate(
-    "F seven distinct fixed-point-free involutions",
-    len(set(translations.values())) == 7
+check(
+    'F exactly seven fixed-point-free quotient translations',
+    len(set(translations.values()))==7
     and all(
         all(
-            t[t[x]] == x and t[x] != x
+            t[t[x]]==x and t[x]!=x
             for x in range(8)
         )
         for t in translations.values()
     )
 )
 
-# The parent symmetry group certified in Gate B
-# acts transitively on all seven directions.
-#
-# In particular, preserving P and Phi alone does
-# not permit a unique invariant direction.
-
-permutation_images = {
-    a: {
-        perm[a]
-        for perm, _ in autos
-    }
-    for a in range(1, 8)
-}
-
-gate(
-    "F no invariant unique translation under residual automorphisms",
-    all(
-        ims == set(range(1, 8))
-        for ims in permutation_images.values()
-    )
+print('F | parent-only orbits:',base_orbits)
+print(
+    'F | parent+supplied-arithmetic restricted orbits:',
+    lattice_orbits
 )
-
-print("F | all seven candidate translations remain equivalent")
 
 
 # ============================================================
-# GATE G — HELD-OUT OPS ACCEPTANCE
+# G: HELD-OUT SIM14 OPS ACCEPTANCE; NO UPSTREAM FITTING
 # ============================================================
 
-print("\n--- GATE G: HELD-OUT OPS ACCEPTANCE ---")
+print('\n--- GATE G: HELD-OUT SIM14–16 OPS ACCEPTANCE ---')
 
-# Frozen target enters here for the first time.
-# None of these objects participate in Gates A-F.
+# The frozen OPS target first enters here.
+# Nothing below was used to generate Gates A-F candidates.
 
-FROZEN_EDGES = {
-    (0, 1), (0, 2), (1, 3), (2, 4),
-    (3, 5), (4, 6), (5, 7), (6, 7)
+FROZEN_EDGES={
+    (0,1),
+    (0,2),
+    (1,3),
+    (2,4),
+    (3,5),
+    (4,6),
+    (5,7),
+    (6,7)
 }
 
-FROZEN_P = (
-    1, 0, 3, 2, 5, 4, 7, 6
+FROZEN_P=(1,0,3,2,5,4,7,6)
+FROZEN_H=(7,6,5,4,3,2,1,0)
+FROZEN_OMEGA_PAIRS=(
+    (0,2),
+    (1,3),
+    (4,6),
+    (5,7)
 )
 
-FROZEN_H = (
-    7, 6, 5, 4, 3, 2, 1, 0
-)
-
-FROZEN_OMEGA_PAIRS = (
-    (0, 2),
-    (1, 3),
-    (4, 6),
-    (5, 7)
-)
-
-# For comparison only, determine which canonical
-# XOR translations happen to match the frozen
-# h permutation under raw integer labeling.
-#
-# Matching as a member of a seven-element family
-# does not constitute independent selection.
-
-raw_h_matches = [
+raw_h=[
     a
-    for a, t in translations.items()
-    if t == FROZEN_H
+    for a,t in translations.items()
+    if t==FROZEN_H
 ]
 
-print(
-    "G | frozen h matches in raw canonical XOR indexing:",
-    raw_h_matches
+check(
+    'G raw frozen h is one member of the unselected family',
+    raw_h==[7]
+)
+
+check(
+    'G lattice-stabilizer singleton is NOT raw frozen h',
+    4 not in raw_h
 )
 
 print(
-    "G | selected h: NO; graph and signed Omega: NOT DERIVED"
+    'G | raw h match:',
+    raw_h,
+    '; symmetry singleton:',
+    lattice_orbits[0]
+)
+
+print(
+    'G | frozen p, Omega, observation B, J_t and labeled C8 NOT DERIVED'
 )
 
 
@@ -1017,128 +997,181 @@ print(
 # MACHINE-READABLE TRUTH PACKET
 # ============================================================
 
-packet = {
-    "sim": "17.4",
+packet={
+    'sim':'17.4',
 
-    "status": "EXACT_RESTRICTED_AUDIT",
+    'amendment':
+        'PARENT_AUTOMORPHISM_ARITHMETIC_STABILIZER',
 
-    "gamma7_minus_gamma8": True,
+    'overall':
+        'PASS_WITH_CERTIFIED_NONUNIQUENESS_AND_SELECTION_LIMITS',
 
-    "projector_rank": 8,
+    'A_clifford_volumes':
+        'Gamma7=-Gamma8, projectors rank8+8',
 
-    "parent_automorphism_subgroup_size": len(autos),
+    'B_closed_coordinate_eight_planes':
+        len(closed),
 
-    "full_parent_automorphism_group_classified": False,
+    'B_unique_coordinate_full_clifford':
+        closed[ambient.index(21)],
 
-    "closed_coordinate_carrier_count": len(closed),
-
-    "ambient_full_clifford_carrier_count":
-        ambient.count(21),
-
-    "parent_projector_intrinsically_selected": False,
-
-    "bilinear_blocks": block_ranks,
-
-    "bilinear_block_tensor_kernels": {
-        k: 64-v
-        for k, v in block_ranks.items()
-    },
-
-    "bilinear_defect_equals_UU": True,
-
-    "quaternionic_4planes": Rrecords,
-
-    "lattice_controls": arith,
-
-    "octavian_supports_supplied": True,
-
-    "octavian_unit_products_tested":
-        len(unit_products),
-
-    "eight_state_quotient_supplied_by_coordinate_basis":
+    'B_parent_noncoordinate_order3_automorphism':
         True,
 
-    "translation_candidates": len(translations),
+    'B_projector_moves_under_parent_automorphism':
+        True,
 
-    "translation_orbit_under_certified_subgroup": 7,
+    'B_full_parent_automorphism_group_enumerated':
+        False,
 
-    "h_intrinsically_selected": False,
+    'C_bilinear_block_ranks':
+        blocks,
 
-    "frozen_h_raw_index_coincidences": raw_h_matches,
+    'C_tensor_kernels':{
+        k:64-v
+        for k,v in blocks.items()
+    },
 
-    "exact_frozen_C8_selected": False,
+    'C_defect_equals_complement_UU':
+        True,
 
-    "p_h_signed_Omega_recovered": False,
+    'D_quaternionic_derived_projectors':
+        qdata,
 
-    "full_OPS_independently_derived": False,
+    'E_declared_octavian_root_count':
+        len(roots),
 
-    "input_provenance": {
-        "parent":
-            "Fixed standard Cayley-Dickson multiplication and Euclidean metric",
+    'E_exact_unit_products_checked':
+        len(roots)**2,
 
-        "projector":
-            "Seven supplied generator family; alternative eight-family gives same eigenspaces",
+    'E_doubled_lattice_basis':
+        lat_basis,
 
-        "arithmetic":
-            "SIM17.1 chosen octavian support code; Z8 controls independently frozen",
+    'E_doubled_lattice_basis_determinant_abs':
+        16,
 
-        "vertex_labels":
-            "Standard Cayley-Dickson coordinate basis, NOT SIM14 labels",
+    'E_arithmetic_controls':
+        lattice_tests,
 
-        "symmetry":
-            "1344 signed-octonion automorphisms certified as 16D lifts; NOT full parent group",
+    'E_arithmetic_is_lattice_inclusion_control':
+        True,
 
-        "F_gate":
-            "Seven unmarked quotient XOR translations; no graph or h",
+    'E_parent_specific_arithmetic_necessity_established':
+        False,
 
-        "G_gate":
-            "Frozen OPS first introduced as held-out target",
+    'E_projector_moving_Psi_preserves_supplied_rational_lattice':
+        False,
 
-        "dynamics":
-            "NONE; exact algebraic admissibility only"
+    'F_signed_basis_parent_symmetry_subgroup':
+        len(autos),
+
+    'F_lattice_preserving_signed_basis_subgroup':
+        len(preserving),
+
+    'F_parent_only_direction_orbits':
+        base_orbits,
+
+    'F_arithmetic_stabilizer_direction_orbits':
+        lattice_orbits,
+
+    'G_frozen_h_raw_index_matches':
+        raw_h,
+
+    'G_frozen_h_independently_selected':
+        False,
+
+    'G_frozen_OPS_independently_recovered':
+        False,
+
+    'provenance':{
+        'parent':
+            'Fixed canonical 16D Cayley-Dickson basis and Euclidean metric',
+
+        'spectral':
+            'Chosen Clifford generator family; projector not parent-intrinsic',
+
+        'coordinate_census':
+            '6435 unital coordinate 8-planes only',
+
+        'arithmetic':
+            'Octavian supports supplied from SIM17.1; original presentation uses SIM14 indexing',
+
+        'symmetry':
+            '1344 signed-basis lifts, 192 preserving supplied lattice; not full parent/lattice group',
+
+        'half_turn':
+            'Seven unsigned XOR translations; raw frozen h first checked in Gate G',
+
+        'dynamics':
+            'NONE; purely algebraic admissibility'
     }
 }
 
 
+# ============================================================
+# SAVE / PRINT VALIDATION RESULTS
+# ============================================================
+
 try:
-    with open(
-        "SIM17.4_truth_packet.json",
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(packet, f, indent=2)
+    filename='SIM17.4_amended_truth_packet.json'
 
+    with open(filename,'w',encoding='utf-8') as fp:
+        json.dump(packet,fp,indent=2)
+
+    print('Truth packet saved:',filename)
+
+except OSError as err:
     print(
-        "Truth packet saved: SIM17.4_truth_packet.json"
+        'Truth packet file write unavailable:',
+        err
     )
-
-except OSError as exc:
-    print("Truth packet could not be written:", exc)
 
 
 print(
-    "TRUTH_PACKET_SUMMARY="
-    + json.dumps(packet, sort_keys=True)
+    'TRUTH_PACKET_SUMMARY='
+    +json.dumps(
+        {
+            k:v
+            for k,v in packet.items()
+            if k!='D_quaternionic_derived_projectors'
+        },
+        sort_keys=True
+    )
 )
 
 
 # ============================================================
-# FINAL VALIDATOR VERDICT
+# FINAL VERDICT
 # ============================================================
 
-print("\n" + "=" * 64)
-print("SIM17.4 — FINAL VALIDATOR VERDICT")
-print("=" * 64)
+print('\n'+'='*67)
+print('SIM17.4 AMENDED VERDICT')
 
-print("Clifford volume identities:      PASS")
-print("Parent spectral projectors:      PASS")
-print("Bilinear 8D sector blocks:       PASS")
-print("Composed 4D projectors:          PASS")
-print("Octavian arithmetic controls:    PASS")
-print("Half-turn intrinsic selection:   NOT ESTABLISHED")
-print("Exact frozen OPS recovery:       NOT ESTABLISHED")
+print(
+    'PASS | Clifford projectors, bilinear UU defect and 4D defect projectors'
+)
 
-print("\nEND SIM17.4")
+print(
+    'PASS | Explicit order-3 automorphism proves P nonunique in parent'
+)
+
+print(
+    'PASS | Lattice inclusion theorem and exact octavian basis controls'
+)
+
+print(
+    'PASS | 1344 -> 192 arithmetic symmetry reduction, direction orbit 1+6'
+)
+
+print(
+    'OPEN | Intrinsic projector / half-turn / frozen OPS selection'
+)
+
+print(
+    'NO DYNAMICS | ISP x LCO not invoked'
+)
+
+print('END SIM17.4 AMENDED')
 
 
 
@@ -1157,58 +1190,64 @@ RESULTS:
 
 
 
-================================================================
-SIM17.4 — PARENT PROJECTION / BILINEAR / HALF-TURN AUDIT
-================================================================
+===================================================================
+SIM17.4 — AMENDED EXACT PARENT-PROJECTION VALIDATOR
+===================================================================
 
---- GATE A: PARENT AND CLIFFORD VOLUME ---PASS | A signed multiplication and 16D identity
-PASS | A individual 15 imaginary orthogonal complex structures
-PASS | A full 7-generator parent anticommutation
-PASS | A Gamma7 = diag(-I8,+I8)
-PASS | A Gamma8 = -Gamma7
-PASS | A exact complementary orthogonal spectral projectors
-A | rank P = 8, rank K = 8
+--- GATE A: CAYLEY-DICKSON AND CLIFFORD VOLUME ---PASS | A full signed XOR algebra, identity, imaginary squares
+PASS | A all 15 imaginary left operators are orthogonal complex structures
+PASS | A seven original generators anticommute throughout the parent
+PASS | A Gamma7 = -Gamma8 = diag(-I8,+I8)
+PASS | A two complementary rank-eight spectral projectors
 
---- GATE B: PROJECTOR SELECTION AND INPUT SYMMETRY ---PASS | B 15 closed coordinate 8-planes
-PASS | B only standard W has 21 ambient anticommuting pairs
-PASS | B 1344 signed octonion basis automorphisms
-PASS | B all 1344 octonion automorphisms lift and fix P
-PASS | B residual parent symmetry transitive on seven directions
-B | certified parent automorphism subgroup: 1344
+--- GATE B: COORDINATE LIMIT AND MOVING PARENT AUTOMORPHISM ---PASS | B coordinate census 6435 candidates, 15 closed, unique 21/21 coordinate carrier
+PASS | B exact Q(sqrt3) automorphism has order three
+PASS | B Psi preserves all 256 parent multiplication products
+PASS | B Psi moves P and its carrier is unital and non-coordinate
+PASS | B transported P has exact idempotence, unit and rank
+B | non-coordinate parent-conjugate rank-eight projector certified
 
---- GATE C: FOUR BILINEAR SECTOR BLOCKS ---PASS | C exact bilinear rank profile 8,0,0,8
-PASS | C tensor kernel dimensions 56,64,64,56
-PASS | C exact UU = -conj(d)b on all 64 input basis pairs
-PASS | C external-input projection defect exactly equals UU contribution
-C | bilinear block ranks: {'WW': 8, 'WU': 0, 'UW': 0, 'UU': 8}
+--- GATE C: BILINEAR TENSOR BLOCKS ---PASS | C full bilinear block profile (8,0,0,8)
+PASS | C exact tensor-kernel dimensions
+PASS | C defect exactly equals complementary UU product on all 256 basis pairs
+PASS | C UU product = -conj(d)b on all 64 complementary pairs
 
---- GATE D: ASSOCIATOR PROJECTORS AND COMPOSITIONS ---PASS | D seven independently enumerated quaternionic coordinate sectors
-PASS | D all 7 associator projectors and composed Psi maps certified
-PASS | D all 7 four-planes have exact inherited symplectic rank signature
+--- GATE D: DEFECT-DERIVED QUATERNIONIC PROJECTORS ---PASS | D seven projectors derived FROM defects, associative and rank four
+PASS | D all composed bilinear maps have 4,0,0,4 block ranks
 
---- GATE E: INDEPENDENT ARITHMETIC CONTROLS ---PASS | E octavian 16-word doubly even additive support code
-PASS | E 240 norm-one doubled-coordinate octavian generators
-PASS | E 57600 octavian unit products lie in chosen order
-PASS | E independent lattice controls separate admissible/inadmissible pairs
-E | arithmetic controls: {'A=Z8_B=Z8': True, 'A=O_B=Z8': True, 'A=Z8_B=O': False, 'A=O_B=O': True}
+--- GATE E: INTEGRAL ARITHMETIC AND NECESSITY CONTROL ---PASS | E code has 16 doubly-even words and XOR closure
+PASS | E all 240 octavian unit vectors explicitly generated
+PASS | E exact 57,600 unit-product closures
+PASS | E binary code generated by four independent words
+PASS | E explicit exact lattice basis covolume 16 in doubled coordinates
+PASS | E basis closure extends bilinearly to entire octavian lattice
+PASS | E lattice contains 1 and is conjugation stable
+PASS | E four arithmetic controls reduce EXACTLY to lattice inclusion
+PASS | E octonion-only arithmetic control reproduces parent UU membership
+PASS | E projector-moving Psi fails to preserve rational O+O lattice
+E | lattice pair results: {'A=Z8_B=Z8': True, 'A=Z8_B=O': False, 'A=O_B=Z8': True, 'A=O_B=O': True}
 
---- GATE F: UNSIGNED DIRECTION/HALF-TURN SELECTION ---PASS | F seven distinct fixed-point-free involutions
-PASS | F no invariant unique translation under residual automorphisms
-F | all seven candidate translations remain equivalent
+--- GATE F: PARENT AND ARITHMETIC STABILIZER ORBITS ---PASS | F exactly 1344 signed octonion basis automorphisms
+PASS | F all 1344 lift to 16D multiplication automorphisms fixing P
+PASS | F precisely 192 certified signed-basis symmetries preserve octavian supports
+PASS | F multiplication-only symmetry gives one 7-direction orbit
+PASS | F supplied arithmetic reduces certified orbits to 1+6
+PASS | F exactly seven fixed-point-free quotient translations
+F | parent-only orbits: [[1, 2, 3, 4, 5, 6, 7]]
+F | parent+supplied-arithmetic restricted orbits: [[4], [1, 2, 3, 5, 6, 7]]
 
---- GATE G: HELD-OUT OPS ACCEPTANCE ---G | frozen h matches in raw canonical XOR indexing: [7]
-G | selected h: NO; graph and signed Omega: NOT DERIVED
-Truth packet saved: SIM17.4_truth_packet.json
-TRUTH_PACKET_SUMMARY={"ambient_full_clifford_carrier_count": 1, "bilinear_block_tensor_kernels": {"UU": 56, "UW": 64, "WU": 64, "WW": 56}, "bilinear_blocks": {"UU": 8, "UW": 0, "WU": 0, "WW": 8}, "bilinear_defect_equals_UU": true, "closed_coordinate_carrier_count": 15, "eight_state_quotient_supplied_by_coordinate_basis": true, "exact_frozen_C8_selected": false, "frozen_h_raw_index_coincidences": [7], "full_OPS_independently_derived": false, "full_parent_automorphism_group_classified": false, "gamma7_minus_gamma8": true, "h_intrinsically_selected": false, "input_provenance": {"F_gate": "Seven unmarked quotient XOR translations; no graph or h", "G_gate": "Frozen OPS first introduced as held-out target", "arithmetic": "SIM17.1 chosen octavian support code; Z8 controls independently frozen", "dynamics": "NONE; exact algebraic admissibility only", "parent": "Fixed standard Cayley-Dickson multiplication and Euclidean metric", "projector": "Seven supplied generator family; alternative eight-family gives same eigenspaces", "symmetry": "1344 signed-octonion automorphisms certified as 16D lifts; NOT full parent group", "vertex_labels": "Standard Cayley-Dickson coordinate basis, NOT SIM14 labels"}, "lattice_controls": {"A=O_B=O": true, "A=O_B=Z8": true, "A=Z8_B=O": false, "A=Z8_B=Z8": true}, "octavian_supports_supplied": true, "octavian_unit_products_tested": 57600, "p_h_signed_Omega_recovered": false, "parent_automorphism_subgroup_size": 1344, "parent_projector_intrinsically_selected": false, "projector_rank": 8, "quaternionic_4planes": [{"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 1, 2, 3], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 1, 4, 5], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 1, 6, 7], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 2, 4, 6], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 2, 5, 7], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 3, 4, 7], "rank_R": 4}, {"bilinear_blocks": {"UU": 4, "UW": 0, "WU": 0, "WW": 4}, "line": [0, 3, 5, 6], "rank_R": 4}], "sim": "17.4", "status": "EXACT_RESTRICTED_AUDIT", "translation_candidates": 7, "translation_orbit_under_certified_subgroup": 7}
+--- GATE G: HELD-OUT SIM14–16 OPS ACCEPTANCE ---PASS | G raw frozen h is one member of the unselected family
+PASS | G lattice-stabilizer singleton is NOT raw frozen h
+G | raw h match: [7] ; symmetry singleton: [4]
+G | frozen p, Omega, observation B, J_t and labeled C8 NOT DERIVED
+Truth packet saved: SIM17.4_amended_truth_packet.json
+TRUTH_PACKET_SUMMARY={"A_clifford_volumes": "Gamma7=-Gamma8, projectors rank8+8", "B_closed_coordinate_eight_planes": 15, "B_full_parent_automorphism_group_enumerated": false, "B_parent_noncoordinate_order3_automorphism": true, "B_projector_moves_under_parent_automorphism": true, "B_unique_coordinate_full_clifford": [0, 1, 2, 3, 4, 5, 6, 7], "C_bilinear_block_ranks": {"UU": 8, "UW": 0, "WU": 0, "WW": 8}, "C_defect_equals_complement_UU": true, "C_tensor_kernels": {"UU": 56, "UW": 64, "WU": 64, "WW": 56}, "E_arithmetic_controls": {"A=O_B=O": true, "A=O_B=Z8": true, "A=Z8_B=O": false, "A=Z8_B=Z8": true}, "E_arithmetic_is_lattice_inclusion_control": true, "E_declared_octavian_root_count": 240, "E_doubled_lattice_basis": [[2, 0, 0, 0, 0, 0, 0, 0], [0, 2, 0, 0, 0, 0, 0, 0], [0, 0, 2, 0, 0, 0, 0, 0], [0, 0, 0, 2, 0, 0, 0, 0], [0, 1, 1, 1, 1, 0, 0, 0], [1, 0, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 0, 1, 0], [1, 1, 1, 0, 0, 0, 0, 1]], "E_doubled_lattice_basis_determinant_abs": 16, "E_exact_unit_products_checked": 57600, "E_parent_specific_arithmetic_necessity_established": false, "E_projector_moving_Psi_preserves_supplied_rational_lattice": false, "F_arithmetic_stabilizer_direction_orbits": [[4], [1, 2, 3, 5, 6, 7]], "F_lattice_preserving_signed_basis_subgroup": 192, "F_parent_only_direction_orbits": [[1, 2, 3, 4, 5, 6, 7]], "F_signed_basis_parent_symmetry_subgroup": 1344, "G_frozen_OPS_independently_recovered": false, "G_frozen_h_independently_selected": false, "G_frozen_h_raw_index_matches": [7], "amendment": "PARENT_AUTOMORPHISM_ARITHMETIC_STABILIZER", "overall": "PASS_WITH_CERTIFIED_NONUNIQUENESS_AND_SELECTION_LIMITS", "provenance": {"arithmetic": "Octavian supports supplied from SIM17.1; original presentation uses SIM14 indexing", "coordinate_census": "6435 unital coordinate 8-planes only", "dynamics": "NONE; purely algebraic admissibility", "half_turn": "Seven unsigned XOR translations; raw frozen h first checked in Gate G", "parent": "Fixed canonical 16D Cayley-Dickson basis and Euclidean metric", "spectral": "Chosen Clifford generator family; projector not parent-intrinsic", "symmetry": "1344 signed-basis lifts, 192 preserving supplied lattice; not full parent/lattice group"}, "sim": "17.4"}
 
-================================================================SIM17.4 — FINAL VALIDATOR VERDICT
-================================================================
-Clifford volume identities:      PASS
-Parent spectral projectors:      PASS
-Bilinear 8D sector blocks:       PASS
-Composed 4D projectors:          PASS
-Octavian arithmetic controls:    PASS
-Half-turn intrinsic selection:   NOT ESTABLISHED
-Exact frozen OPS recovery:       NOT ESTABLISHED
-
-END SIM17.4
+===================================================================SIM17.4 AMENDED VERDICT
+PASS | Clifford projectors, bilinear UU defect and 4D defect projectors
+PASS | Explicit order-3 automorphism proves P nonunique in parent
+PASS | Lattice inclusion theorem and exact octavian basis controls
+PASS | 1344 -> 192 arithmetic symmetry reduction, direction orbit 1+6
+OPEN | Intrinsic projector / half-turn / frozen OPS selection
+NO DYNAMICS | ISP x LCO not invoked
+END SIM17.4 AMENDED
